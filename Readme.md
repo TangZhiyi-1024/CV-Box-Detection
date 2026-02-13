@@ -92,3 +92,103 @@ In summary, while the method performs well on most datasets,  its main limitatio
 
 
 
+## 4. Individual Exercise 1.1: MLESAC
+
+### 4.1 Experiment Setup
+
+We extended the baseline implementation with an `mlesac` scoring mode in `src/ransac.py`.
+
+For a fair comparison, we ran both `ransac` and `mlesac` on all four datasets with:
+
+- `epsilon in {0.003, 0.005, 0.007, 0.010}` m
+- same preprocessing and postprocessing pipeline
+- same random seed
+
+All raw results are exported to:
+
+- `outputs/mlesac_epsilon_sweep.csv`
+- `outputs/mlesac_epsilon_summary.csv`
+
+### 4.2 Results (Sensitivity to epsilon)
+
+The metric for sensitivity is the standard deviation of estimated dimensions over different `epsilon` values.
+
+| Method | Mean height std (m) | Mean length std (m) | Mean width std (m) | Mean runtime (s) |
+| ------ | ------------------- | ------------------- | ------------------ | ---------------- |
+| RANSAC | 0.00390             | 0.00426             | 0.00460            | 1.1893           |
+| MLESAC | 0.00147             | 0.00499             | 0.00530            | 1.4748           |
+
+Observation:
+
+- MLESAC clearly reduces sensitivity on **height** estimation.
+- For length/width, MLESAC is not always lower than RANSAC in this dataset.
+- MLESAC is slower because it accumulates residual-based cost instead of only counting inliers.
+
+### 4.3 Advantages and Disadvantages
+
+Advantages:
+
+1. Uses residual magnitude for inliers, not only binary inlier/outlier voting.
+2. More stable when threshold changes, especially for plane-distance (height) estimation.
+
+Disadvantages:
+
+1. Higher computational cost.
+2. Still sensitive when different dominant structures compete for inliers in top-plane fitting.
+
+
+## 5. Individual Exercise 1.2: Preemptive RANSAC
+
+### 5.1 Experiment Setup
+
+We implemented `preemptive_ransac_plane` in `src/ransac.py` and evaluated:
+
+- `M in {64, 256, 1024}` (number of hypotheses)
+- `B in {100, 200, 400}` (batch size)
+- fixed `epsilon = 0.005`
+
+Raw outputs:
+
+- `outputs/preemptive_ransac_sweep.csv`
+- `outputs/preemptive_ransac_summary.csv`
+
+Accuracy is measured as absolute difference to the baseline RANSAC result on the same dataset.
+
+### 5.2 Results (Time Budget vs Accuracy)
+
+| M | B | Mean runtime (s) | Mean abs err height (m) | Mean abs err length (m) | Mean abs err width (m) |
+| - | - | ---------------- | ----------------------- | ----------------------- | ---------------------- |
+| 64 | 200 | 0.0262 | 0.00502 | 0.00467 | 0.00670 |
+| 256 | 200 | 0.0381 | 0.00212 | 0.00515 | 0.00450 |
+| 1024 | 200 | 0.0823 | 0.00172 | 0.00193 | 0.00135 |
+
+Interpretation:
+
+- Small `M` gives very fast execution but larger model error.
+- Large `M` improves robustness/accuracy but increases runtime.
+- `M=256` is a practical compromise for this dataset.
+
+Visualization for three time budgets (`M=64,256,1024`, `B=200`) on the floor plane:
+
+![Preemptive M Comparison](outputs/preemptive_M_comparison_floor.png)
+
+### 5.3 Advantages and Disadvantages
+
+Advantages:
+
+1. Significant runtime reduction under tight time budgets.
+2. Natural tradeoff control by tuning `M` and `B`.
+
+Disadvantages:
+
+1. Too aggressive preemption can discard good hypotheses early.
+2. Parameter choice depends on scene complexity and noise level.
+
+
+## 6. Reproducibility
+
+Run all extension experiments with:
+
+```bash
+MPLCONFIGDIR=/tmp/.mpl .venv/bin/python run_assignment_extensions.py
+```
