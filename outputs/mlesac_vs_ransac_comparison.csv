@@ -1,0 +1,5 @@
+dataset,ransac_height_std_m,mlesac_height_std_m,height_std_reduction_pct,ransac_length_std_m,mlesac_length_std_m,length_std_reduction_pct,ransac_width_std_m,mlesac_width_std_m,width_std_reduction_pct,ransac_runtime_sec,mlesac_runtime_sec,runtime_delta_sec_mlesac_minus_ransac
+example1kinect,0.00935,0.00686,26.63,0.01329,0.02072,-55.91,0.00414,0.02275,-449.52,0.0571,0.0595,0.0024
+example2kinect,0.00854,0.00437,48.83,0.00894,0.01454,-62.64,0.01433,0.00518,63.85,0.053,0.0592,0.0062
+example3kinect,0.00221,0.02756,-1147.06,0.04351,0.02667,38.7,0.02547,0.10493,-311.97,0.053,0.0578,0.0048
+example4kinect,0.00879,0.00799,9.1,0.02018,0.0152,24.68,0.03045,0.01049,65.55,0.0509,0.0585,0.0076

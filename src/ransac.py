@@ -1,130 +1,215 @@
 import numpy as np
+
 from .geometry import plane_from_3pts, point_plane_signed_distance
 
 
-# def ransac_plane(PC, valid_mask, thresh=0.01, max_iters=1000, rng=None):
-def ransac_plane(PC, valid_mask, thresh=0.01, max_iters=1000,
-                 rng=None, mode="ransac", gamma=None):
+def _prepare_points(PC, valid_mask):
+    H, W, _ = PC.shape
+    pts_all = PC.reshape(-1, 3)
+    vm = valid_mask.reshape(-1).astype(bool)
+    idxs = np.flatnonzero(vm)
+    if idxs.size < 3:
+        raise ValueError("Not enough valid points to estimate a plane")
+    pts_valid = pts_all[idxs]
+    return H, W, pts_all, vm, idxs, pts_valid
+
+
+def _model_from_three_points(pts_all, sample_indices):
+    p1, p2, p3 = pts_all[sample_indices]
+    return plane_from_3pts(p1, p2, p3)
+
+
+def _evaluate_distances(pts, n, d):
+    return np.abs(point_plane_signed_distance(pts, n, d))
+
+
+def ransac_plane(PC, valid_mask, thresh=0.01, max_iters=1000, rng=None):
     """
-    在点云上拟合主平面
-    返回: n, d, inlier_mask
+    Standard RANSAC plane fitting.
+    Returns: n, d, inlier_mask
     """
     if rng is None:
         rng = np.random.default_rng(42)
 
-    H, W, _ = PC.shape
-    pts = PC.reshape(-1, 3)
-    vm = valid_mask.reshape(-1)
-    idxs = np.flatnonzero(vm)
-    if len(idxs) < 3:
-        raise ValueError("有效点不足以拟合平面")
+    H, W, pts_all, vm, idxs, _ = _prepare_points(PC, valid_mask)
 
     best_inliers = None
-    if mode == "ransac":
-        best_score = -1  # 越大越好
-    else:  # mlesac
-        best_score = np.inf  # 越小越好
+    best_count = -1
     best_model = (None, None)
 
     for _ in range(max_iters):
-        # 随机抽 3 点
         sample = rng.choice(idxs, size=3, replace=False)
-        p1, p2, p3 = pts[sample]
-        n, d = plane_from_3pts(p1, p2, p3)
+        n, d = _model_from_three_points(pts_all, sample)
         if n is None:
             continue
 
-        # 距离阈值内的内点
-        dist = np.abs(point_plane_signed_distance(pts, n, d))
+        dist = _evaluate_distances(pts_all, n, d)
+        inliers = (dist < thresh) & vm
+        count = int(inliers.sum())
 
-        if mode == "ransac":
-            inliers = (dist < thresh) & vm
-            score = inliers.sum()  # 越大越好
-            better = score > best_score
-
-        elif mode == "mlesac":
-            if gamma is None:
-                gamma = 2.0 * thresh
-
-            dv = dist[vm]  # 只对有效点算
-            score = np.where(dv < thresh, dv, gamma).sum()  # 越小越好
-            inliers = (dist < thresh) & vm  # 仍然用阈值定义内点
-            better = score < best_score
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-        if better:
-            best_score = score
+        if count > best_count:
+            best_count = count
             best_inliers = inliers
             best_model = (n, d)
-        # dist = np.abs(point_plane_signed_distance(pts, n, d))
-        # inliers = (dist < thresh) & vm
-        # count = inliers.sum()
-        # if count > best_count:
-        #     best_count = count
-        #     best_inliers = inliers
-        #     best_model = (n, d)
 
-        # 如果几乎所有有效点都是内点可提前结束
-        if mode == "ransac" and score > 0.9 * vm.sum():
+        if count > 0.9 * int(vm.sum()):
             break
+
+    if best_model[0] is None:
+        raise RuntimeError("RANSAC failed to produce a valid plane model")
 
     n, d = best_model
     inlier_mask = best_inliers.reshape(H, W)
     return n, d, inlier_mask
 
-def preemptive_ransac_plane(PC, valid_mask, thresh=0.01, M=256, B=200, rng=None, gamma=None):
+
+def mlesac_plane(PC, valid_mask, eps=0.01, gamma=None, max_iters=1000, rng=None):
+    """
+    MLESAC plane fitting with cost:
+      C = sum(dist_i if dist_i < eps else gamma)
+    Returns: n, d, inlier_mask
+    """
     if rng is None:
         rng = np.random.default_rng(42)
     if gamma is None:
-        gamma = 2.0 * thresh
+        gamma = 1.5 * eps
+    if gamma <= eps:
+        raise ValueError("gamma must be strictly larger than eps")
 
-    H, W, _ = PC.shape
-    pts = PC.reshape(-1, 3)
-    vm = valid_mask.reshape(-1)
-    idxs = np.flatnonzero(vm)
-    if len(idxs) < 3:
-        raise ValueError("有效点不足以拟合平面")
+    H, W, pts_all, vm, idxs, _ = _prepare_points(PC, valid_mask)
+    vm_count = int(vm.sum())
 
-    # 1) 生成 M 个 hypothesis
-    models = []
-    for _ in range(M):
+    best_cost = np.inf
+    best_model = (None, None)
+    best_inliers = None
+
+    for _ in range(max_iters):
         sample = rng.choice(idxs, size=3, replace=False)
-        p1, p2, p3 = pts[sample]
-        n, d = plane_from_3pts(p1, p2, p3)
-        if n is not None:
-            models.append((n, d))
-    if len(models) == 0:
-        raise ValueError("未生成有效平面假设")
+        n, d = _model_from_three_points(pts_all, sample)
+        if n is None:
+            continue
 
-    # 打乱用于评估的点顺序
-    eval_ids = rng.permutation(idxs)
+        dist = _evaluate_distances(pts_all, n, d)
+        dist_valid = dist[vm]
+        cost = np.where(dist_valid < eps, dist_valid, gamma).sum()
 
-    # 2) 分批评估 + 淘汰
-    costs = np.zeros(len(models), dtype=float)
+        if cost < best_cost:
+            best_cost = cost
+            best_model = (n, d)
+            best_inliers = (dist < eps) & vm
 
-    for t in range(0, len(eval_ids), B):
-        batch = eval_ids[t:t+B]
-        batch_pts = pts[batch]
+            # Early stop: near-perfect fit where almost all valid points are inliers.
+            if int(best_inliers.sum()) > 0.98 * vm_count:
+                break
 
-        # 更新每个模型在这一批点上的 cost（用 MLESAC 的 p(d)）
-        for j, (n, d) in enumerate(models):
-            dv = np.abs(point_plane_signed_distance(batch_pts, n, d))
-            costs[j] += np.where(dv < thresh, dv, gamma).sum()
+    if best_model[0] is None:
+        raise RuntimeError("MLESAC failed to produce a valid plane model")
 
-        # 每处理完一批就 preempt
-        k = int(np.floor(len(models) * (2 ** (-np.floor((t + B) / B)))))  # 你也可以直接每轮减半
-        k = max(1, min(k, len(models)))
+    n, d = best_model
+    return n, d, best_inliers.reshape(H, W)
 
-        # 保留 cost 最小的 k 个
-        keep = np.argsort(costs)[:k]
-        models = [models[i] for i in keep]
-        costs = costs[keep]
 
-        if len(models) == 1:
-            break
+def _build_hypotheses(pts_all, idxs, M, rng, max_attempt_factor=25):
+    normals = []
+    offsets = []
+    attempts = 0
+    max_attempts = max(200, M * max_attempt_factor)
 
-    # 输出最终模型，并算 inlier mask
-    n, d = models[0]
-    dist_all = np.abs(point_plane_signed_distance(pts, n, d))
-    inliers = (dist_all < thresh) & vm
-    return n, d, inliers.reshape(H, W)
+    while len(normals) < M and attempts < max_attempts:
+        attempts += 1
+        sample = rng.choice(idxs, size=3, replace=False)
+        n, d = _model_from_three_points(pts_all, sample)
+        if n is None:
+            continue
+        normals.append(n)
+        offsets.append(d)
+
+    if not normals:
+        raise RuntimeError("Failed to initialize any valid hypothesis")
+
+    return np.asarray(normals), np.asarray(offsets)
+
+
+def _batch_cost(dist_abs, eps, score_mode="msac", gamma=None):
+    if score_mode == "ransac":
+        return (dist_abs >= eps).astype(np.float64)
+    if score_mode == "msac":
+        return np.minimum(dist_abs, eps)
+    if score_mode == "mlesac":
+        if gamma is None:
+            gamma = 1.5 * eps
+        return np.where(dist_abs < eps, dist_abs, gamma)
+    raise ValueError("score_mode must be one of {'ransac', 'msac', 'mlesac'}")
+
+
+def preemptive_ransac_plane(
+    PC,
+    valid_mask,
+    thresh=0.01,
+    M=256,
+    B=200,
+    score_mode="msac",
+    gamma=None,
+    rng=None,
+):
+    """
+    Preemptive RANSAC for plane fitting.
+
+    1) Sample M hypotheses once.
+    2) Evaluate hypotheses on shuffled points in batches of size B.
+    3) After each batch, keep only top f(i) hypotheses:
+       f(i) = floor(M * 2^(-floor(i / B)))
+    4) Stop when one model remains or all points are consumed.
+    """
+    if rng is None:
+        rng = np.random.default_rng(42)
+    if M < 1 or B < 1:
+        raise ValueError("M and B must be positive integers")
+
+    H, W, pts_all, vm, idxs, pts_valid = _prepare_points(PC, valid_mask)
+    n_pts = pts_valid.shape[0]
+
+    normals, offsets = _build_hypotheses(pts_all, idxs, M=M, rng=rng)
+    n_models = normals.shape[0]
+    costs = np.zeros(n_models, dtype=np.float64)
+    active = np.arange(n_models, dtype=np.int64)
+
+    order = rng.permutation(n_pts)
+    pts_eval = pts_valid[order]
+
+    processed = 0
+    while processed < n_pts and active.size > 1:
+        end = min(processed + B, n_pts)
+        batch = pts_eval[processed:end]  # (b, 3)
+
+        n_active = normals[active]  # (k, 3)
+        d_active = offsets[active]  # (k,)
+        # (b, k): absolute point-to-plane distance
+        dist_abs = np.abs(batch @ n_active.T + d_active)
+        costs[active] += _batch_cost(
+            dist_abs=dist_abs, eps=thresh, score_mode=score_mode, gamma=gamma
+        ).sum(axis=0)
+
+        processed = end
+        rank = np.argsort(costs[active])
+        active = active[rank]
+
+        stage = processed // B
+        keep = max(1, int(np.floor(M * (2.0 ** (-stage)))))
+        keep = min(keep, active.size)
+        active = active[:keep]
+
+    # Final selection over surviving hypotheses using all valid points.
+    n_active = normals[active]
+    d_active = offsets[active]
+    dist_full = np.abs(pts_valid @ n_active.T + d_active)
+    full_costs = _batch_cost(
+        dist_abs=dist_full, eps=thresh, score_mode=score_mode, gamma=gamma
+    ).sum(axis=0)
+    best_idx = active[int(np.argmin(full_costs))]
+
+    n = normals[best_idx]
+    d = offsets[best_idx]
+    dist_all = _evaluate_distances(pts_all, n, d)
+    inlier_mask = ((dist_all < thresh) & vm).reshape(H, W)
+    return n, d, inlier_mask

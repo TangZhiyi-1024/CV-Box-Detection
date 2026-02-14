@@ -1,0 +1,9 @@
+method,dataset,height_std_m,length_std_m,width_std_m,mean_runtime_sec
+mlesac,example1kinect,0.00686,0.02072,0.02275,0.0595
+mlesac,example2kinect,0.00437,0.01454,0.00518,0.0592
+mlesac,example3kinect,0.02756,0.02667,0.10493,0.0578
+mlesac,example4kinect,0.00799,0.0152,0.01049,0.0585
+ransac,example1kinect,0.00935,0.01329,0.00414,0.0571
+ransac,example2kinect,0.00854,0.00894,0.01433,0.053
+ransac,example3kinect,0.00221,0.04351,0.02547,0.053
+ransac,example4kinect,0.00879,0.02018,0.03045,0.0509
