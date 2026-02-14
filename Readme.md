@@ -98,18 +98,19 @@ In summary, while the method performs well on most datasets,  its main limitatio
 
 ### 4.1 Experiment Setup
 
-We extended the baseline implementation with an `mlesac` scoring mode in `src/ransac.py`.
+We implemented an explicit `mlesac_plane` variant in `src/ransac.py` and evaluated it against baseline `ransac` under the same pipeline.
 
-For a fair comparison, we ran both `ransac` and `mlesac` on all four datasets with:
+Settings:
 
 - `epsilon in {0.003, 0.005, 0.007, 0.010}` m
-- same preprocessing and postprocessing pipeline
-- same random seed
+- Same preprocessing and postprocessing
+- Same deterministic seed policy
 
-All raw results are exported to:
+Raw outputs:
 
 - `outputs/mlesac_epsilon_sweep.csv`
 - `outputs/mlesac_epsilon_summary.csv`
+- `outputs/mlesac_vs_ransac_comparison.csv`
 
 ### 4.2 Results (Sensitivity to epsilon)
 
@@ -117,14 +118,14 @@ The metric for sensitivity is the standard deviation of estimated dimensions ove
 
 | Method | Mean height std (m) | Mean length std (m) | Mean width std (m) | Mean runtime (s) |
 | ------ | ------------------- | ------------------- | ------------------ | ---------------- |
-| RANSAC | 0.00390             | 0.00426             | 0.00460            | 1.1893           |
-| MLESAC | 0.00147             | 0.00499             | 0.00530            | 1.4748           |
+| RANSAC | 0.00544             | 0.00341             | 0.00427            | 3.8741           |
+| MLESAC | 0.00084             | 0.00553             | 0.00557            | 4.1537           |
 
 Observation:
 
-- MLESAC clearly reduces sensitivity on **height** estimation.
-- For length/width, MLESAC is not always lower than RANSAC in this dataset.
-- MLESAC is slower because it accumulates residual-based cost instead of only counting inliers.
+- MLESAC significantly improves **height stability** (about 84.5% reduction in mean std).
+- For length/width, MLESAC is dataset-dependent: it improves some scenes but degrades on `example4kinect` (see comparison CSV).
+- MLESAC is moderately slower (about +0.28 s on average).
 
 ### 4.3 Advantages and Disadvantages
 
@@ -158,17 +159,18 @@ Accuracy is measured as absolute difference to the baseline RANSAC result on the
 
 ### 5.2 Results (Time Budget vs Accuracy)
 
-| M | B | Mean runtime (s) | Mean abs err height (m) | Mean abs err length (m) | Mean abs err width (m) |
-| - | - | ---------------- | ----------------------- | ----------------------- | ---------------------- |
-| 64 | 200 | 0.0262 | 0.00502 | 0.00467 | 0.00670 |
-| 256 | 200 | 0.0381 | 0.00212 | 0.00515 | 0.00450 |
-| 1024 | 200 | 0.0823 | 0.00172 | 0.00193 | 0.00135 |
+`preemptive_tradeoff_ranking.csv` shows two Pareto-optimal settings on this dataset:
+
+| M | B | Mean runtime (s) | Mean abs err height (m) | Mean abs err length (m) | Mean abs err width (m) | Mean abs err total (m) | Pareto |
+| - | - | ---------------- | ----------------------- | ----------------------- | ---------------------- | ---------------------- | ------ |
+| 64  | 200 | 0.0409 | 0.00150 | 0.00105 | 0.00158 | 0.00138 | Yes |
+| 256 | 100 | 0.0536 | 0.00162 | 0.00057 | 0.00125 | 0.00115 | Yes |
 
 Interpretation:
 
-- Small `M` gives very fast execution but larger model error.
-- Large `M` improves robustness/accuracy but increases runtime.
-- `M=256` is a practical compromise for this dataset.
+- `M=64, B=200` gives the fastest runtime with low error.
+- `M=256, B=100` gives the best aggregate error with only a small runtime increase.
+- Larger budgets (e.g., `M=1024`) are not always better in total error here, so tuning is necessary.
 
 Visualization for three time budgets (`M=64,256,1024`, `B=200`) on the floor plane:
 
@@ -189,8 +191,22 @@ Disadvantages:
 
 ## 6. Reproducibility
 
-Run all extension experiments with:
+Run the full extension suite (MLESAC + Preemptive + comparison tables) with:
 
 ```bash
-MPLCONFIGDIR=/tmp/.mpl .venv/bin/python run_assignment_extensions.py
+python run_assignment_extensions.py --mode full
 ```
+
+This command exports:
+
+- `outputs/mlesac_epsilon_sweep.csv`
+- `outputs/mlesac_epsilon_summary.csv`
+- `outputs/mlesac_vs_ransac_comparison.csv`
+- `outputs/preemptive_ransac_sweep.csv`
+- `outputs/preemptive_ransac_summary.csv`
+- `outputs/preemptive_tradeoff_ranking.csv`
+
+Optional:
+
+- `python run_assignment_extensions.py --mode all` also runs sweeps + comparison and tries visualization.
+- If `matplotlib` is unavailable, visualization is skipped while CSV outputs are still generated.
